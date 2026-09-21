@@ -183,6 +183,35 @@ import { KEY_A, KEY_ENTER, BTN_LEFT, ABS_MT_POSITION_X } from "myde-input/dist/c
 └─────────────────────────────────────────────────────┘
 ```
 
+## CLI 工具
+
+项目附带一个类似 `evtest` 的命令行工具，用于交互式查看输入设备和实时事件。
+
+```bash
+# 列出所有输入设备
+npx tsx cli.ts list
+
+# 列出所有设备（含未知类型）
+npx tsx cli.ts list --all
+
+# 查看设备详细能力
+npx tsx cli.ts info /dev/input/event0
+
+# 实时监听事件（交互选择设备）
+npx tsx cli.ts monitor
+
+# 监听指定设备
+npx tsx cli.ts monitor /dev/input/event0
+
+# 只看键盘事件
+npx tsx cli.ts monitor --event=key
+
+# 只看鼠标移动和按键
+npx tsx cli.ts monitor /dev/input/event3 --event=key,rel
+```
+
+> **注意**：监听设备事件需要访问 `/dev/input/event*` 的权限。通常需要将用户加入 `input` 组（`sudo usermod -aG input $USER`）或以 root 运行。
+
 ## 开发
 
 详见 [AGENTS.md](./AGENTS.md)。

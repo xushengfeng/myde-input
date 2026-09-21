@@ -36,6 +36,7 @@ myde-input/
 │       ├── reader.rs             # epoll 多设备事件读取器
 │       └── device_info.rs        # 设备能力读取（ioctl EVIOCGBIT, EVIOCGABS 等）
 │
+├── cli.ts                        # CLI 工具（类似 evtest 的设备监控）
 ├── bin/                          # 编译后的 Rust 二进制（构建时生成）
 ├── dist/                         # TypeScript 构建输出
 ├── package.json                  # Node.js 包配置
@@ -90,6 +91,14 @@ pnpm install
 
 # TypeScript 构建
 pnpm build
+
+# 运行 CLI 工具（类似 evtest）
+pnpm cli list                        # 列出设备
+pnpm cli list --all                  # 列出所有设备
+pnpm cli info /dev/input/event0      # 查看设备能力
+pnpm cli monitor                     # 交互选择设备并监听事件
+pnpm cli monitor /dev/input/event0   # 监听指定设备
+pnpm cli monitor --event=key         # 只看键盘事件
 
 # 运行测试
 pnpm test           # watch 模式

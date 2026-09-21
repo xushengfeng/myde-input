@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::os::unix::io::RawFd;
+use std::os::unix::io::AsRawFd;
 
 use crate::device_info;
 use crate::protocol::*;
@@ -46,8 +46,8 @@ pub fn scan_devices() -> Vec<(DeviceFullInfo, Option<String>)> {
 fn scan_single_device(path: &str, proc_info: &ProcDeviceInfo) -> (DeviceFullInfo, Option<String>) {
     let mut errors = Vec::new();
 
-    // 打开设备文件
-    let fd = match open_device(path) {
+    // 打开设备文件（File 必须保持存活，否则 fd 会被关闭）
+    let file = match open_device(path) {
         Ok(f) => f,
         Err(e) => {
             errors.push(DeviceError {
@@ -71,6 +71,7 @@ fn scan_single_device(path: &str, proc_info: &ProcDeviceInfo) -> (DeviceFullInfo
             );
         }
     };
+    let fd = file.as_raw_fd();
 
     // 读取设备能力
     let capabilities = match device_info::read_capabilities(fd) {
@@ -127,8 +128,8 @@ fn scan_single_device(path: &str, proc_info: &ProcDeviceInfo) -> (DeviceFullInfo
         }
     }
 
-    // 关闭文件描述符
-    let _ = close_device(fd);
+    // file 在此 drop，fd 自动关闭
+    drop(file);
 
     let error_msg = if errors.is_empty() {
         None
@@ -236,9 +237,26 @@ fn parse_proc_devices() -> Result<HashMap<String, ProcDeviceInfo>, String> {
             }
         } else if line.starts_with('H') {
             // 解析 Handlers: H: ... eventN ...
-            for part in line.split_whitespace() {
-                if part.starts_with("event") {
-                    current_event = Some(part.to_string());
+            // 格式可能是 "Handlers=event5"（无空格）或 "Handlers=kbd event5"（有空格）
+            if let Some(pos) = line.find("event") {
+                let rest = &line[pos..]; // "event5 mouse0 ..." 或 "event 5"
+                // 提取 "event" 后面的数字（可能紧跟或有空格）
+                let after_event = &rest[5..]; // 跳过 "event"
+                if after_event.starts_with(|c: char| c.is_ascii_digit()) {
+                    // "event5" 的情况
+                    let end = after_event
+                        .find(|c: char| !c.is_ascii_digit())
+                        .unwrap_or(after_event.len());
+                    current_event = Some(format!("event{}", &after_event[..end]));
+                } else {
+                    // "event 5" 的情况，数字在下一个空白分隔的 token
+                    let num = after_event
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("");
+                    if num.chars().all(|c| c.is_ascii_digit()) && !num.is_empty() {
+                        current_event = Some(format!("event{}", num));
+                    }
                 }
             }
         } else if line.is_empty() {
@@ -277,21 +295,12 @@ fn parse_proc_devices() -> Result<HashMap<String, ProcDeviceInfo>, String> {
     Ok(devices)
 }
 
-/// 打开设备文件
-fn open_device(path: &str) -> Result<RawFd, String> {
+/// 打开设备文件（返回 File 以保持 fd 存活）
+fn open_device(path: &str) -> Result<std::fs::File, String> {
     use std::os::unix::fs::OpenOptionsExt;
-    let file = fs::OpenOptions::new()
+    fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_RDONLY | libc::O_NONBLOCK)
         .open(path)
-        .map_err(|e| format!("打开设备 {} 失败: {}", path, e))?;
-
-    use std::os::unix::io::AsRawFd;
-    Ok(file.as_raw_fd())
-}
-
-/// 关闭设备文件描述符
-fn close_device(fd: RawFd) -> Result<(), String> {
-    use nix::unistd::close;
-    close(fd).map_err(|e| format!("关闭 fd 失败: {}", e))
+        .map_err(|e| format!("打开设备 {} 失败: {}", path, e))
 }

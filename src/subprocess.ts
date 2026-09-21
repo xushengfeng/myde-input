@@ -6,6 +6,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { arch, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { pack, unpack } from "msgpackr";
 import type { RustMessage, TsCommand } from "./protocol.ts";
 import { ErrorCode, type Result, err, errFromUnknown, ok, okVoid } from "./result.ts";
 
@@ -95,8 +96,6 @@ export class RustBridge {
 
       // 解码 MessagePack
       try {
-        // 使用 msgpackr 解码
-        const { unpack } = require("msgpackr") as { unpack: (data: Buffer) => unknown };
         const msg = unpack(msgData) as RustMessage;
         this.notifyMessage(msg);
       } catch (e) {
@@ -118,7 +117,6 @@ export class RustBridge {
     }
 
     try {
-      const { pack } = require("msgpackr") as { pack: (data: unknown) => Buffer };
       const data = pack(cmd);
 
       const lenBuf = Buffer.alloc(4);

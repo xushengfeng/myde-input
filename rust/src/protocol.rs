@@ -1,23 +1,22 @@
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeMap;
+use serde::{Deserialize, Serialize, Serializer};
 
 /// Rust -> TypeScript 消息
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
+///
+/// 手动实现 Serialize 以确保序列化为 { "type": "...", ...fields } 的 map 格式，
+/// 兼容 TypeScript msgpackr 解码。serde(tag="type") 在 rmp_serde 中默认序列化为数组。
+#[derive(Debug, Clone, Deserialize)]
 pub enum RustMessage {
     /// 设备列表响应
-    #[serde(rename = "device_list")]
     DeviceList { devices: Vec<DeviceFullInfo> },
 
     /// 设备添加（热插拔）
-    #[serde(rename = "device_added")]
     DeviceAdded { device: DeviceFullInfo },
 
     /// 设备移除
-    #[serde(rename = "device_removed")]
     DeviceRemoved { path: String },
 
     /// 输入事件
-    #[serde(rename = "input_event")]
     InputEvent {
         path: String,
         event_type: u16,
@@ -28,7 +27,6 @@ pub enum RustMessage {
     },
 
     /// 错误（不是 panic，是返回）
-    #[serde(rename = "error")]
     Error {
         code: String,
         message: String,
@@ -36,12 +34,75 @@ pub enum RustMessage {
     },
 
     /// 成功响应（无数据）
-    #[serde(rename = "ok")]
     Ok,
 }
 
+impl Serialize for RustMessage {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            RustMessage::DeviceList { devices } => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("type", "device_list")?;
+                map.serialize_entry("devices", devices)?;
+                map.end()
+            }
+            RustMessage::DeviceAdded { device } => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("type", "device_added")?;
+                map.serialize_entry("device", device)?;
+                map.end()
+            }
+            RustMessage::DeviceRemoved { path } => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("type", "device_removed")?;
+                map.serialize_entry("path", path)?;
+                map.end()
+            }
+            RustMessage::InputEvent {
+                path,
+                event_type,
+                code,
+                value,
+                timestamp_sec,
+                timestamp_usec,
+            } => {
+                let mut map = serializer.serialize_map(Some(7))?;
+                map.serialize_entry("type", "input_event")?;
+                map.serialize_entry("path", path)?;
+                map.serialize_entry("event_type", event_type)?;
+                map.serialize_entry("code", code)?;
+                map.serialize_entry("value", value)?;
+                map.serialize_entry("timestamp_sec", timestamp_sec)?;
+                map.serialize_entry("timestamp_usec", timestamp_usec)?;
+                map.end()
+            }
+            RustMessage::Error {
+                code,
+                message,
+                detail,
+            } => {
+                let mut map = serializer.serialize_map(Some(4))?;
+                map.serialize_entry("type", "error")?;
+                map.serialize_entry("code", code)?;
+                map.serialize_entry("message", message)?;
+                if detail.is_some() {
+                    map.serialize_entry("detail", detail)?;
+                }
+                map.end()
+            }
+            RustMessage::Ok => {
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("type", "ok")?;
+                map.end()
+            }
+        }
+    }
+}
+
 /// TypeScript -> Rust 命令
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// 从 TS 发送的 MessagePack 对象反序列化。TS 侧使用 msgpackr 的 `pack()` 发送对象格式。
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type")]
 pub enum TsCommand {
     /// 列出所有设备
@@ -124,9 +185,9 @@ pub struct DeviceError {
 }
 
 impl RustMessage {
-    /// 序列化为 MessagePack
+    /// 序列化为 MessagePack（使用 map 格式，兼容 TypeScript msgpackr 解码）
     pub fn to_msgpack(&self) -> Result<Vec<u8>, String> {
-        rmp_serde::to_vec(self).map_err(|e| format!("序列化失败: {}", e))
+        rmp_serde::to_vec_named(self).map_err(|e| format!("序列化失败: {}", e))
     }
 
     /// 从 MessagePack 反序列化
