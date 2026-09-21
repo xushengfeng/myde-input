@@ -76,6 +76,7 @@ name = "myde-input-reader"
 version = "1.0.0"
 dependencies = [
  "evdev-rs",
+ "libc",
  "nix",
  "rmp-serde",
  "serde",

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::os::unix::io::{AsRawFd, RawFd};
 
-use nix::sys::epoll::{EpollEvent, EpollFlags, EpollWaitTimeout};
+use nix::sys::epoll::{Epoll, EpollEvent, EpollFlags};
 
 /// 输入事件（与 Linux input_event 结构对应）
 #[derive(Debug, Clone)]
@@ -17,7 +17,7 @@ pub struct RawInputEvent {
 
 /// 多设备事件读取器
 pub struct EventReader {
-    epoll_fd: RawFd,
+    epoll: Epoll,
     fd_to_path: HashMap<RawFd, String>,
     fd_to_file: HashMap<RawFd, File>,
 }
@@ -25,11 +25,11 @@ pub struct EventReader {
 impl EventReader {
     /// 创建新的事件读取器
     pub fn new() -> Result<Self, String> {
-        let epoll_fd = nix::sys::epoll::epoll_create1(nix::sys::epoll::EpollCreateFlags::empty())
-            .map_err(|e| format!("创建 epoll 失败: {}", e))?;
+        let epoll =
+            Epoll::new(nix::sys::epoll::EpollCreateFlags::empty()).map_err(|e| format!("创建 epoll 失败: {}", e))?;
 
         Ok(EventReader {
-            epoll_fd,
+            epoll,
             fd_to_path: HashMap::new(),
             fd_to_file: HashMap::new(),
         })
@@ -50,13 +50,9 @@ impl EventReader {
 
         // 注册到 epoll
         let event = EpollEvent::new(EpollFlags::EPOLLIN, fd as u64);
-        nix::sys::epoll::epoll_ctl(
-            self.epoll_fd,
-            nix::sys::epoll::EpollOp::EpollCtlAdd,
-            fd,
-            &event,
-        )
-        .map_err(|e| format!("epoll_ctl 添加失败: {}", e))?;
+        self.epoll
+            .add(&file, event)
+            .map_err(|e| format!("epoll_ctl 添加失败: {}", e))?;
 
         self.fd_to_path.insert(fd, path.to_string());
         self.fd_to_file.insert(fd, file);
@@ -74,12 +70,9 @@ impl EventReader {
 
         if let Some(fd) = fd {
             // 从 epoll 移除
-            let _ = nix::sys::epoll::epoll_ctl(
-                self.epoll_fd,
-                nix::sys::epoll::EpollOp::EpollCtlDel,
-                fd,
-                None,
-            );
+            if let Some(file) = self.fd_to_file.get(&fd) {
+                let _ = self.epoll.delete(file);
+            }
 
             self.fd_to_path.remove(&fd);
             self.fd_to_file.remove(&fd);
@@ -92,13 +85,12 @@ impl EventReader {
     pub fn wait_event(&self, timeout_ms: i32) -> Result<Option<RawInputEvent>, String> {
         let mut events = [EpollEvent::empty(); 1];
 
-        let timeout = if timeout_ms < 0 {
-            EpollWaitTimeout::None
-        } else {
-            EpollWaitTimeout::from(timeout_ms as u32)
-        };
+        // timeout: -1 = 无限等待, 0 = 立即返回, >0 = 等待毫秒数
+        let timeout: isize = if timeout_ms < 0 { -1 } else { timeout_ms as isize };
 
-        let nfds = nix::sys::epoll::epoll_wait(self.epoll_fd, &mut events, timeout)
+        let nfds = self
+            .epoll
+            .wait(&mut events, timeout)
             .map_err(|e| format!("epoll_wait 失败: {}", e))?;
 
         if nfds == 0 {
@@ -161,13 +153,6 @@ impl EventReader {
     pub fn close(&mut self) {
         self.fd_to_file.clear();
         self.fd_to_path.clear();
-        // epoll_fd 会在 Drop 时自动关闭
-    }
-}
-
-impl Drop for EventReader {
-    fn drop(&mut self) {
-        use nix::unistd::close;
-        let _ = close(self.epoll_fd);
+        // Epoll 会在 Drop 时自动关闭
     }
 }

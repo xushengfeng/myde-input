@@ -12,7 +12,8 @@ path = "src/main.rs"
 evdev-rs = "0.6"
 serde = { version = "1", features = ["derive"] }
 rmp-serde = "1.1"
-nix = { version = "0.27", features = ["fs", "ioctl"] }
+nix = { version = "0.27", features = ["fs", "ioctl", "event"] }
+libc = "0.2"
 
 [profile.release]
 opt-level = 3

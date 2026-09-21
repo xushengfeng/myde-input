@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::os::unix::io::RawFd;
 
-use crate::device_info::{self, AxisInfo};
+use crate::device_info;
 use crate::protocol::*;
 
 /// 扫描所有输入设备
@@ -279,7 +279,7 @@ fn parse_proc_devices() -> Result<HashMap<String, ProcDeviceInfo>, String> {
 
 /// 打开设备文件
 fn open_device(path: &str) -> Result<RawFd, String> {
-    use std::os::unix::io::OpenOptionsExt;
+    use std::os::unix::fs::OpenOptionsExt;
     let file = fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_RDONLY | libc::O_NONBLOCK)

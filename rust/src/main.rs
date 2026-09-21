@@ -6,7 +6,7 @@ mod scanner;
 use std::io::{self, Read, Write};
 
 use protocol::*;
-use reader::{EventReader, RawInputEvent};
+use reader::EventReader;
 
 fn main() {
     // 设置 stdout 为二进制模式（MessagePack）
