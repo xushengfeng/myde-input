@@ -30,6 +30,7 @@ export enum ErrorCode {
   ProcessSpawnFailed = "PROCESS_SPAWN_FAILED",
   ProcessExited = "PROCESS_EXITED",
   ProcessCrashed = "PROCESS_CRASHED",
+  IoError = "IO_ERROR",
 
   // 设备相关
   DeviceNotFound = "DEVICE_NOT_FOUND",

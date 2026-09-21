@@ -81,9 +81,9 @@ impl EventReader {
         Ok(())
     }
 
-    /// 等待下一个事件（阻塞，带超时）
-    pub fn wait_event(&self, timeout_ms: i32) -> Result<Option<RawInputEvent>, String> {
-        let mut events = [EpollEvent::empty(); 1];
+    /// 等待事件并批量读取（阻塞，带超时）
+    pub fn wait_events(&self, timeout_ms: i32) -> Result<Vec<RawInputEvent>, String> {
+        let mut events = [EpollEvent::empty(); 16];
 
         // timeout: -1 = 无限等待, 0 = 立即返回, >0 = 等待毫秒数
         let timeout: isize = if timeout_ms < 0 { -1 } else { timeout_ms as isize };
@@ -94,54 +94,54 @@ impl EventReader {
             .map_err(|e| format!("epoll_wait 失败: {}", e))?;
 
         if nfds == 0 {
-            return Ok(None);
+            return Ok(Vec::new());
         }
 
-        let fd = events[0].data() as RawFd;
-        let path = self
-            .fd_to_path
-            .get(&fd)
-            .ok_or_else(|| format!("未知 fd: {}", fd))?
-            .clone();
+        let mut collected = Vec::new();
+        for ev in &events[..nfds] {
+            let fd = ev.data() as RawFd;
+            if let Some(path) = self.fd_to_path.get(&fd) {
+                // 批量读取该 fd 当前可用的所有事件（每次最多读 64 个 input_event = 1536 字节）
+                let mut buf = [0u8; 24 * 64];
+                loop {
+                    let ret = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+                    if ret < 0 {
+                        let errno = nix::errno::Errno::last();
+                        if errno == nix::errno::Errno::EAGAIN || errno == nix::errno::Errno::EWOULDBLOCK {
+                            break;
+                        }
+                        return Err(format!("读取事件失败: {}", errno));
+                    }
+                    if ret == 0 {
+                        break;
+                    }
 
-        // 读取事件
-        self.read_event(fd, &path)
-    }
+                    let count = (ret as usize) / 24;
+                    for i in 0..count {
+                        let chunk = &buf[i * 24..(i + 1) * 24];
+                        let sec = i64::from_ne_bytes(chunk[0..8].try_into().unwrap());
+                        let usec = i64::from_ne_bytes(chunk[8..16].try_into().unwrap());
+                        let event_type = u16::from_ne_bytes(chunk[16..18].try_into().unwrap());
+                        let code = u16::from_ne_bytes(chunk[18..20].try_into().unwrap());
+                        let value = i32::from_ne_bytes(chunk[20..24].try_into().unwrap());
+                        collected.push(RawInputEvent {
+                            path: path.clone(),
+                            event_type,
+                            code,
+                            value,
+                            timestamp_sec: sec,
+                            timestamp_usec: usec,
+                        });
+                    }
 
-    /// 从文件描述符读取事件
-    fn read_event(&self, fd: RawFd, path: &str) -> Result<Option<RawInputEvent>, String> {
-        // input_event 结构体: timeval(16 bytes) + type(2) + code(2) + value(4) = 24 bytes
-        let mut buf = [0u8; 24];
-
-        let ret = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, 24) };
-
-        if ret < 0 {
-            let errno = nix::errno::Errno::last();
-            if errno == nix::errno::Errno::EAGAIN || errno == nix::errno::Errno::EWOULDBLOCK {
-                return Ok(None);
+                    if (ret as usize) < buf.len() {
+                        break;
+                    }
+                }
             }
-            return Err(format!("读取事件失败: {}", errno));
         }
 
-        if ret < 24 {
-            return Err(format!("读取事件不完整: {} bytes", ret));
-        }
-
-        // 解析 input_event 结构
-        let sec = i64::from_ne_bytes(buf[0..8].try_into().unwrap());
-        let usec = i64::from_ne_bytes(buf[8..16].try_into().unwrap());
-        let event_type = u16::from_ne_bytes(buf[16..18].try_into().unwrap());
-        let code = u16::from_ne_bytes(buf[18..20].try_into().unwrap());
-        let value = i32::from_ne_bytes(buf[20..24].try_into().unwrap());
-
-        Ok(Some(RawInputEvent {
-            path: path.to_string(),
-            event_type,
-            code,
-            value,
-            timestamp_sec: sec,
-            timestamp_usec: usec,
-        }))
+        Ok(collected)
     }
 
     /// 获取当前监听的设备列表

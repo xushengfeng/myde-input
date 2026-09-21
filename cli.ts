@@ -10,12 +10,6 @@
 
 import * as readline from "node:readline";
 import {
-  ErrorCode,
-  InputDevice,
-  InputManager,
-  type DeviceInfo,
-} from "./src/index.ts";
-import {
   ABS_MT_BLOB_ID,
   ABS_MT_DISTANCE,
   ABS_MT_ORIENTATION,
@@ -56,8 +50,8 @@ import {
   BTN_TOOL_FINGER,
   BTN_TOOL_LENS,
   BTN_TOOL_MOUSE,
-  BTN_TOOL_PENCIL,
   BTN_TOOL_PEN,
+  BTN_TOOL_PENCIL,
   BTN_TOOL_QUADTAP,
   BTN_TOOL_QUINTTAP,
   BTN_TOOL_RUBBER,
@@ -76,6 +70,7 @@ import {
   REL_X,
   REL_Y,
 } from "./src/codes.ts";
+import { type DeviceInfo, ErrorCode, type InputDevice, InputManager } from "./src/index.ts";
 
 // ── ANSI 颜色 ──────────────────────────────────────────────
 
@@ -253,27 +248,8 @@ function codeName(type: number, code: number): string {
   }
 }
 
-function keyStateName(value: number): string {
-  switch (value) {
-    case 0:
-      return "UP";
-    case 1:
-      return "DOWN";
-    case 2:
-      return "REPEAT";
-    default:
-      return String(value);
-  }
-}
-
 function pad(s: string, width: number): string {
   return s.length >= width ? s : s + " ".repeat(width - s.length);
-}
-
-function formatTimestamp(sec: number, usec: number): string {
-  const totalMs = sec * 1000 + Math.floor(usec / 1000);
-  const s = (totalMs / 1000).toFixed(3);
-  return pad(s, 12);
 }
 
 function capabilityList(caps: DeviceCapabilities): string[] {
@@ -298,10 +274,7 @@ function deviceTypeName(type: string): string {
 }
 
 /** 等待初始设备列表到达 */
-function waitForDevices(
-  manager: InputManager,
-  timeoutMs = 1500,
-): Promise<void> {
+function waitForDevices(manager: InputManager, timeoutMs = 1500): Promise<void> {
   return new Promise((resolve) => {
     if (manager.getDevices().length > 0) {
       resolve();
@@ -362,9 +335,7 @@ async function cmdList(showAll: boolean): Promise<void> {
     console.log(
       `      ID:   vendor=${hex(d.vendor)} product=${hex(d.product)} version=${hex(d.version)}`,
     );
-    console.log(
-      `      能力: ${capabilityList(d.capabilities).join(", ")}`,
-    );
+    console.log(`      能力: ${capabilityList(d.capabilities).join(", ")}`);
 
     if (d.capabilities.maxTouchSlots != null) {
       console.log(`      触控槽数: ${d.capabilities.maxTouchSlots}`);
@@ -438,12 +409,8 @@ async function cmdInfo(devicePath: string): Promise<void> {
 
   if (caps.keyCodes.length > 0) {
     console.log();
-    console.log(
-      bold(`  ── 按键/按钮 (${caps.keyCodes.length} 个) ──`),
-    );
-    const names = caps.keyCodes
-      .slice(0, 30)
-      .map((c) => codeName(1, c));
+    console.log(bold(`  ── 按键/按钮 (${caps.keyCodes.length} 个) ──`));
+    const names = caps.keyCodes.slice(0, 30).map((c) => codeName(1, c));
     console.log(`    ${names.join(", ")}`);
     if (caps.keyCodes.length > 30) {
       console.log(dim(`    ... 及另外 ${caps.keyCodes.length - 30} 个`));
@@ -468,18 +435,10 @@ async function cmdInfo(devicePath: string): Promise<void> {
 
   console.log();
   console.log(bold("  ── 设备特性 ──"));
-  console.log(
-    `    键盘:      ${caps.hasKeyboard ? green("是") : dim("否")}`,
-  );
-  console.log(
-    `    鼠标:      ${caps.hasMouse ? green("是") : dim("否")}`,
-  );
-  console.log(
-    `    触摸板:    ${caps.hasTouchpad ? green("是") : dim("否")}`,
-  );
-  console.log(
-    `    触摸屏:    ${caps.hasTouchscreen ? green("是") : dim("否")}`,
-  );
+  console.log(`    键盘:      ${caps.hasKeyboard ? green("是") : dim("否")}`);
+  console.log(`    鼠标:      ${caps.hasMouse ? green("是") : dim("否")}`);
+  console.log(`    触摸板:    ${caps.hasTouchpad ? green("是") : dim("否")}`);
+  console.log(`    触摸屏:    ${caps.hasTouchscreen ? green("是") : dim("否")}`);
 
   if (caps.maxTouchSlots != null) {
     console.log(`    多点触控槽: ${cyan(String(caps.maxTouchSlots))}`);
@@ -495,22 +454,13 @@ async function cmdInfo(devicePath: string): Promise<void> {
     console.log(
       `    位置 Y: min=${ti.positionY.min} max=${ti.positionY.max} fuzz=${ti.positionY.fuzz} flat=${ti.positionY.flat}`,
     );
-    if (ti.pressure)
-      console.log(
-        `    压力:   min=${ti.pressure.min} max=${ti.pressure.max}`,
-      );
+    if (ti.pressure) console.log(`    压力:   min=${ti.pressure.min} max=${ti.pressure.max}`);
     if (ti.touchMajor)
-      console.log(
-        `    触摸长轴: min=${ti.touchMajor.min} max=${ti.touchMajor.max}`,
-      );
+      console.log(`    触摸长轴: min=${ti.touchMajor.min} max=${ti.touchMajor.max}`);
     if (ti.touchMinor)
-      console.log(
-        `    触摸短轴: min=${ti.touchMinor.min} max=${ti.touchMinor.max}`,
-      );
+      console.log(`    触摸短轴: min=${ti.touchMinor.min} max=${ti.touchMinor.max}`);
     if (ti.orientation)
-      console.log(
-        `    方向:   min=${ti.orientation.min} max=${ti.orientation.max}`,
-      );
+      console.log(`    方向:   min=${ti.orientation.min} max=${ti.orientation.max}`);
     if (ti.mtProtocol) console.log(`    MT 协议: ${ti.mtProtocol}`);
   }
 
@@ -543,7 +493,7 @@ async function cmdMonitor(
 
   manager.on("error", (err) => {
     if (err.code !== ErrorCode.ProcessExited) {
-      console.error(gray(`  [错误] ${err.message}`));
+      console.error(red(`  [错误] ${err.message}`));
     }
   });
 
@@ -569,10 +519,7 @@ async function cmdMonitor(
   monitorDevice(device, filterEventTypes);
 }
 
-function monitorDevice(
-  device: InputDevice,
-  filterEventTypes: number[] | null,
-): void {
+function monitorDevice(device: InputDevice, filterEventTypes: number[] | null): void {
   const info = device.info;
   const icon = deviceTypeName(info.type);
 
@@ -612,9 +559,7 @@ function monitorDevice(
     const typePad = pad(eventTypeName(event.type), 11);
     const codePad = pad(codeName(event.type, event.code), 22);
 
-    console.log(
-      `  ${tsStr} ${typeStr(typePad)} ${codeStr(codePad)} ${valueStr}`,
-    );
+    console.log(`  ${tsStr} ${typeStr(typePad)} ${codeStr(codePad)} ${valueStr}`);
   });
 
   device.on("error", (err) => {
@@ -646,8 +591,7 @@ function colorCode(type: number, code: number): (s: string) => string {
   switch (type) {
     case 1: {
       const name = BTN_NAMES[code] ?? LINUX_TO_WEB_KEY[code] ?? "";
-      if (name.startsWith("BTN_TOOL_") || name === "BTN_TOUCH")
-        return magenta;
+      if (name.startsWith("BTN_TOOL_") || name === "BTN_TOUCH") return magenta;
       if (name.startsWith("BTN_")) return cyan;
       return bold;
     }
@@ -692,10 +636,7 @@ function colorAbsValue(code: number, value: number): string {
 
 // ── 设备查找 / 选择 ────────────────────────────────────────
 
-function findDevice(
-  manager: InputManager,
-  pathOrName: string,
-): InputDevice | undefined {
+function findDevice(manager: InputManager, pathOrName: string): InputDevice | undefined {
   const byPath = manager.getDevice(pathOrName);
   if (byPath) return byPath;
 
@@ -703,24 +644,12 @@ function findDevice(
   const byBase = manager.getDevice(`/dev/input/${basename}`);
   if (byBase) return byBase;
 
-  return manager
+  const match = manager
     .getDevices()
     .find(
-      (d) =>
-        d.path.includes(pathOrName) ||
-        d.name.toLowerCase().includes(pathOrName.toLowerCase()),
-    )
-    ?.path
-    ? manager.getDevice(
-        manager
-          .getDevices()
-          .find(
-            (d) =>
-              d.path.includes(pathOrName) ||
-              d.name.toLowerCase().includes(pathOrName.toLowerCase()),
-          )!.path,
-      )
-    : undefined;
+      (d) => d.path.includes(pathOrName) || d.name.toLowerCase().includes(pathOrName.toLowerCase()),
+    );
+  return match ? manager.getDevice(match.path) : undefined;
 }
 
 function listDevicesBrief(manager: InputManager): void {
@@ -737,9 +666,7 @@ function listDevicesBrief(manager: InputManager): void {
   console.log();
 }
 
-async function selectDevice(
-  manager: InputManager,
-): Promise<InputDevice | undefined> {
+async function selectDevice(manager: InputManager): Promise<InputDevice | undefined> {
   await waitForDevices(manager);
 
   const devices = manager.getDevices();
@@ -775,7 +702,7 @@ async function selectDevice(
     });
   });
 
-  const idx = parseInt(answer, 10) - 1;
+  const idx = Number.parseInt(answer, 10) - 1;
   if (Number.isNaN(idx) || idx < 0 || idx >= devices.length) {
     console.error(red("无效选择。"));
     return undefined;
@@ -898,7 +825,7 @@ function parseEventFilter(flags: Set<string>): number[] | null {
     .split(",")
     .map((s) => {
       const trimmed = s.trim().toLowerCase();
-      return typeMap[trimmed] ?? parseInt(trimmed, 10);
+      return typeMap[trimmed] ?? Number.parseInt(trimmed, 10);
     })
     .filter((n) => !Number.isNaN(n));
 }

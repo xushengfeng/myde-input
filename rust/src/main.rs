@@ -9,10 +9,19 @@ use protocol::*;
 use reader::EventReader;
 
 fn main() {
-    // 设置 stdout 为二进制模式（MessagePack）
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
+
+    // 设置 stdin 为非阻塞模式，避免主循环卡在 stdin.read()
+    {
+        use std::os::unix::io::AsRawFd;
+        let fd = stdin.as_raw_fd();
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFL);
+            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+    }
 
     // 创建事件读取器
     let mut event_reader = match EventReader::new() {
@@ -41,9 +50,9 @@ fn main() {
     let mut stdin_pos = 0;
 
     loop {
-        // 尝试从 stdin 读取命令
-        let cmd = read_command(&stdin, &mut stdin_buf, &mut stdin_pos);
-        if let Some(cmd) = cmd {
+        // 处理所有已到达的命令
+        let mut should_exit = false;
+        while let Some(cmd) = read_command(&stdin, &mut stdin_buf, &mut stdin_pos) {
             match cmd {
                 TsCommand::ListDevices => {
                     let devices = scanner::scan_devices();
@@ -95,26 +104,30 @@ fn main() {
                     }
                 }
                 TsCommand::Exit => {
+                    should_exit = true;
                     break;
                 }
             }
         }
 
-        // 读取输入事件（非阻塞，超时 10ms）
-        match event_reader.wait_event(10) {
-            Ok(Some(event)) => {
-                let msg = RustMessage::InputEvent {
-                    path: event.path,
-                    event_type: event.event_type,
-                    code: event.code,
-                    value: event.value,
-                    timestamp_sec: event.timestamp_sec,
-                    timestamp_usec: event.timestamp_usec,
-                };
-                send_message(&mut stdout, &msg);
-            }
-            Ok(None) => {
-                // 没有事件，继续
+        if should_exit {
+            break;
+        }
+
+        // 批量读取输入事件（非阻塞，超时 10ms）
+        match event_reader.wait_events(10) {
+            Ok(events) => {
+                for event in events {
+                    let msg = RustMessage::InputEvent {
+                        path: event.path,
+                        event_type: event.event_type,
+                        code: event.code,
+                        value: event.value,
+                        timestamp_sec: event.timestamp_sec,
+                        timestamp_usec: event.timestamp_usec,
+                    };
+                    send_message(&mut stdout, &msg);
+                }
             }
             Err(e) => {
                 send_message(
@@ -133,13 +146,19 @@ fn main() {
 }
 
 /// 读取命令（非阻塞）
+///
+/// TS 侧发送的帧格式: [4字节小端长度][MessagePack 数据]
 fn read_command(stdin: &io::Stdin, buf: &mut Vec<u8>, pos: &mut usize) -> Option<TsCommand> {
     // 尝试读取 stdin
     let mut stdin = stdin.lock();
     let mut tmp = [0u8; 4096];
 
     match stdin.read(&mut tmp) {
-        Ok(n) if n > 0 => {
+        Ok(0) => {
+            // EOF: 父进程已关闭 stdin，退出
+            return Some(TsCommand::Exit);
+        }
+        Ok(n) => {
             // 追加到缓冲区
             if *pos + n > buf.len() {
                 buf.resize(*pos + n, 0);
@@ -147,23 +166,47 @@ fn read_command(stdin: &io::Stdin, buf: &mut Vec<u8>, pos: &mut usize) -> Option
             buf[*pos..*pos + n].copy_from_slice(&tmp[..n]);
             *pos += n;
         }
-        _ => {
-            // 没有数据或错误
+        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+            // 没有数据，继续检查现有缓冲区
+        }
+        Err(_) => {
+            // 管道损坏或其他错误，退出
+            return Some(TsCommand::Exit);
         }
     }
 
-    // 尝试解析一个完整的命令
-    // MessagePack 消息没有固定长度，我们需要尝试解析
-    if *pos > 0 {
-        match TsCommand::from_msgpack(&buf[..*pos]) {
-            Ok(cmd) => {
-                *pos = 0; // 重置缓冲区
-                Some(cmd)
-            }
-            Err(_) => None, // 数据不完整，等待更多数据
+    // 需要至少 4 字节读取长度前缀
+    if *pos < 4 {
+        return None;
+    }
+
+    let msg_len = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+
+    // 检查是否有完整消息
+    if *pos < 4 + msg_len {
+        return None;
+    }
+
+    // 提取消息体
+    let msg_data = &buf[4..4 + msg_len];
+
+    // 解析 MessagePack
+    match TsCommand::from_msgpack(msg_data) {
+        Ok(cmd) => {
+            // 移除已消费的数据
+            let consumed = 4 + msg_len;
+            buf.copy_within(consumed.., 0);
+            *pos -= consumed;
+            Some(cmd)
         }
-    } else {
-        None
+        Err(e) => {
+            // 解析失败，丢弃这条消息
+            let consumed = 4 + msg_len;
+            buf.copy_within(consumed.., 0);
+            *pos -= consumed;
+            let _ = e; // 可选: 记录错误
+            None
+        }
     }
 }
 

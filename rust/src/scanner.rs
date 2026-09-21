@@ -158,10 +158,10 @@ fn scan_single_device(path: &str, proc_info: &ProcDeviceInfo) -> (DeviceFullInfo
 fn detect_device_type_from_caps(caps: &DeviceCapabilities, name: &str) -> String {
     let name_lower = name.to_lowercase();
 
-    if caps.has_touchscreen {
-        "touchscreen".to_string()
-    } else if caps.has_touchpad {
+    if name_lower.contains("touchpad") || (caps.has_touchpad && !name_lower.contains("touchscreen")) {
         "touchpad".to_string()
+    } else if caps.has_touchscreen || (name_lower.contains("touch") && !name_lower.contains("pad")) {
+        "touchscreen".to_string()
     } else if caps.has_keyboard {
         "keyboard".to_string()
     } else if caps.has_mouse {

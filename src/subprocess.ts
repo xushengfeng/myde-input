@@ -42,6 +42,13 @@ export class RustBridge {
         this.notifyError(ErrorCode.ProcessSpawnFailed, `子进程启动失败: ${e.message}`, e);
       });
 
+      // 监听 stdin error，防止子进程退出时 write 触发未捕获的 EPIPE
+      this.proc.stdin?.on("error", (e: NodeJS.ErrnoException) => {
+        if (e.code !== "EPIPE") {
+          this.notifyError(ErrorCode.IoError, `stdin 错误: ${e.message}`, e);
+        }
+      });
+
       this.proc.on("exit", (code, signal) => {
         if (code !== 0 && code !== null) {
           this.notifyError(
@@ -112,8 +119,8 @@ export class RustBridge {
    * 发送命令到 Rust 子进程
    */
   send(cmd: TsCommand): Result<void> {
-    if (!this.proc || !this.proc.stdin) {
-      return err(ErrorCode.ProcessExited, "子进程未运行");
+    if (!this.proc || !this.proc.stdin || !this.proc.stdin.writable) {
+      return err(ErrorCode.ProcessExited, "子进程未运行或已关闭");
     }
 
     try {

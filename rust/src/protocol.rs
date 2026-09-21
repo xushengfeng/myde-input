@@ -81,12 +81,13 @@ impl Serialize for RustMessage {
                 message,
                 detail,
             } => {
-                let mut map = serializer.serialize_map(Some(4))?;
+                let len = if detail.is_some() { 4 } else { 3 };
+                let mut map = serializer.serialize_map(Some(len))?;
                 map.serialize_entry("type", "error")?;
                 map.serialize_entry("code", code)?;
                 map.serialize_entry("message", message)?;
-                if detail.is_some() {
-                    map.serialize_entry("detail", detail)?;
+                if let Some(d) = detail {
+                    map.serialize_entry("detail", d)?;
                 }
                 map.end()
             }
@@ -99,27 +100,51 @@ impl Serialize for RustMessage {
     }
 }
 
-/// TypeScript -> Rust 命令
+/// TypeScript -> Rust 命令的原始 map 格式
 ///
-/// 从 TS 发送的 MessagePack 对象反序列化。TS 侧使用 msgpackr 的 `pack()` 发送对象格式。
+/// TS 发送 {"type": "start_reading", "paths": [...]} 格式的 MessagePack map。
+/// 通过 try_from 先反序列化为这个平坦结构，再转换为 TsCommand。
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "type")]
+struct RawTsCommand {
+    #[serde(rename = "type")]
+    cmd_type: String,
+    paths: Option<Vec<String>>,
+}
+
+/// TypeScript -> Rust 命令
+#[derive(Debug, Clone)]
 pub enum TsCommand {
-    /// 列出所有设备
-    #[serde(rename = "list_devices")]
     ListDevices,
-
-    /// 开始读取指定设备
-    #[serde(rename = "start_reading")]
     StartReading { paths: Vec<String> },
-
-    /// 停止读取指定设备
-    #[serde(rename = "stop_reading")]
     StopReading { paths: Vec<String> },
-
-    /// 退出
-    #[serde(rename = "exit")]
     Exit,
+}
+
+impl TryFrom<RawTsCommand> for TsCommand {
+    type Error = String;
+
+    fn try_from(raw: RawTsCommand) -> Result<Self, Self::Error> {
+        match raw.cmd_type.as_str() {
+            "list_devices" => Ok(TsCommand::ListDevices),
+            "start_reading" => {
+                let paths = raw.paths.ok_or("missing 'paths' field")?;
+                Ok(TsCommand::StartReading { paths })
+            }
+            "stop_reading" => {
+                let paths = raw.paths.ok_or("missing 'paths' field")?;
+                Ok(TsCommand::StopReading { paths })
+            }
+            "exit" => Ok(TsCommand::Exit),
+            other => Err(format!("unknown command type: {}", other)),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for TsCommand {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = RawTsCommand::deserialize(deserializer)?;
+        TsCommand::try_from(raw).map_err(serde::de::Error::custom)
+    }
 }
 
 /// 设备完整信息
@@ -200,6 +225,32 @@ impl TsCommand {
     /// 从 MessagePack 反序列化
     pub fn from_msgpack(data: &[u8]) -> Result<Self, String> {
         rmp_serde::from_slice(data).map_err(|e| format!("反序列化命令失败: {}", e))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_serialize_length() {
+        let msg = RustMessage::Error {
+            code: "ERR".to_string(),
+            message: "msg".to_string(),
+            detail: None,
+        };
+        let bytes = msg.to_msgpack().unwrap();
+        // 应该序列化为 3 个 entry 的 map (0x83)
+        assert_eq!(bytes[0], 0x83);
+
+        let msg_with_detail = RustMessage::Error {
+            code: "ERR".to_string(),
+            message: "msg".to_string(),
+            detail: Some("detail info".to_string()),
+        };
+        let bytes_with_detail = msg_with_detail.to_msgpack().unwrap();
+        // 应该序列化为 4 个 entry 的 map (0x84)
+        assert_eq!(bytes_with_detail[0], 0x84);
     }
 }
 
