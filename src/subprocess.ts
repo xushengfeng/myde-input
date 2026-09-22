@@ -10,14 +10,17 @@ import { pack, unpack } from "msgpackr";
 import type { RustMessage, TsCommand } from "./protocol.ts";
 import { ErrorCode, type Result, err, errFromUnknown, ok, okVoid } from "./result.ts";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+// CJS 构建（require 加载）中 __dirname 可用；ESM 中从 import.meta.url 推导。
+// 注意不能在 CJS 下走 import.meta.url：rollup 的垫片在存在 document 的环境（如 Electron 渲染进程）会走错误分支。
+const pkgDir =
+  typeof __dirname !== "undefined" ? __dirname : dirname(fileURLToPath(import.meta.url));
 
 /** 获取 Rust 二进制路径 */
 function getBinaryPath(): string {
   const platformName = platform();
   const archName = arch();
   const binaryName = `myde-input-reader-${platformName}-${archName}`;
-  return join(__dirname, "..", "bin", binaryName);
+  return join(pkgDir, "..", "bin", binaryName);
 }
 
 /** 子进程管理器 */
