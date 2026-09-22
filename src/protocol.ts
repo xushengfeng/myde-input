@@ -3,6 +3,7 @@
  */
 
 import type {
+  AxisInfo,
   DeviceCapabilities,
   DeviceError,
   DeviceInfo,
@@ -60,6 +61,10 @@ export interface RustDeviceInfo {
     slot?: { min: number; max: number; fuzz: number; flat: number; resolution: number };
     mt_protocol?: string;
   };
+  abs_info?: Record<
+    string,
+    { min: number; max: number; fuzz: number; flat: number; resolution: number }
+  >;
   errors: { field: string; message: string }[];
 }
 
@@ -82,8 +87,23 @@ export function convertDeviceInfo(rust: RustDeviceInfo): DeviceInfo {
     version: rust.version,
     capabilities: convertCapabilities(rust.capabilities),
     touchInfo: rust.touch_info ? convertTouchInfo(rust.touch_info) : undefined,
+    absInfo: convertAbsInfo(rust.abs_info),
     errors: rust.errors,
   };
+}
+
+function convertAbsInfo(absInfo: RustDeviceInfo["abs_info"]): Record<number, AxisInfo> {
+  const result: Record<number, AxisInfo> = {};
+  for (const [code, axis] of Object.entries(absInfo ?? {})) {
+    result[Number(code)] = {
+      min: axis.min,
+      max: axis.max,
+      fuzz: axis.fuzz,
+      flat: axis.flat,
+      resolution: axis.resolution,
+    };
+  }
+  return result;
 }
 
 function convertCapabilities(caps: RustDeviceInfo["capabilities"]): DeviceCapabilities {

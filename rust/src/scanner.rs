@@ -23,6 +23,7 @@ pub fn scan_devices() -> Vec<(DeviceFullInfo, Option<String>)> {
                 version: 0,
                 capabilities: empty_capabilities(),
                 touch_info: None,
+                abs_info: HashMap::new(),
                 errors: vec![DeviceError {
                     field: "proc_devices".to_string(),
                     message: e.clone(),
@@ -65,6 +66,7 @@ fn scan_single_device(path: &str, proc_info: &ProcDeviceInfo) -> (DeviceFullInfo
                     version: proc_info.version,
                     capabilities: empty_capabilities(),
                     touch_info: None,
+                    abs_info: HashMap::new(),
                     errors,
                 },
                 Some(e),
@@ -96,6 +98,14 @@ fn scan_single_device(path: &str, proc_info: &ProcDeviceInfo) -> (DeviceFullInfo
         }
     } else {
         None
+    };
+
+    // 读取所有绝对轴的量程信息（用于绝对定位设备的坐标校准）
+    let mut abs_info = HashMap::new();
+    for &axis in &capabilities.abs_axes {
+        if let Ok(info) = device_info::read_abs_info(fd, axis) {
+            abs_info.insert(axis.to_string(), info);
+        }
     };
 
     // 读取设备名称（如果 proc 中没有）
@@ -148,6 +158,7 @@ fn scan_single_device(path: &str, proc_info: &ProcDeviceInfo) -> (DeviceFullInfo
             version: proc_info.version,
             capabilities: caps_with_slots,
             touch_info,
+            abs_info,
             errors,
         },
         error_msg,

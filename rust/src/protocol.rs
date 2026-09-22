@@ -1,5 +1,6 @@
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize, Serializer};
+use std::collections::HashMap;
 
 /// Rust -> TypeScript 消息
 ///
@@ -159,6 +160,9 @@ pub struct DeviceFullInfo {
     pub version: u16,
     pub capabilities: DeviceCapabilities,
     pub touch_info: Option<TouchInfo>,
+    /// 所有绝对轴的量程信息，key 为轴码（十进制字符串）
+    #[serde(default)]
+    pub abs_info: HashMap<String, AxisInfo>,
     pub errors: Vec<DeviceError>,
 }
 

@@ -66,6 +66,8 @@ export interface DeviceInfo {
   version: number;
   capabilities: DeviceCapabilities;
   touchInfo?: TouchInfo;
+  /** 所有绝对轴的量程信息，key 为轴码（如 ABS_X=0） */
+  absInfo: Record<number, AxisInfo>;
   errors: DeviceError[];
 }
 
