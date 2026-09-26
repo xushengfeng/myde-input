@@ -6,6 +6,7 @@ on:
       - "v*"
 
 permissions:
+  id-token: write # Required for OIDC
   contents: write
 
 jobs:
@@ -81,8 +82,6 @@ jobs:
 
       - name: 发布到 npm
         run: pnpm publish --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: 创建 GitHub Release
         uses: softprops/action-gh-release@v2
