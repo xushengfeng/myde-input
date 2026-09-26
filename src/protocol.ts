@@ -92,8 +92,8 @@ export function convertDeviceInfo(rust: RustDeviceInfo): DeviceInfo {
   };
 }
 
-function convertAbsInfo(absInfo: RustDeviceInfo["abs_info"]): Record<number, AxisInfo> {
-  const result: Record<number, AxisInfo> = {};
+function convertAbsInfo(absInfo: RustDeviceInfo["abs_info"]): Partial<Record<number, AxisInfo>> {
+  const result: Partial<Record<number, AxisInfo>> = {};
   for (const [code, axis] of Object.entries(absInfo ?? {})) {
     result[Number(code)] = {
       min: axis.min,
