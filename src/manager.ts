@@ -7,17 +7,39 @@ import { InputDevice } from "./device.ts";
 import { type RustMessage, convertDeviceInfo } from "./protocol.ts";
 import { type ErrorCode, type Result, err, okVoid } from "./result.ts";
 import { RustBridge } from "./subprocess.ts";
-import type { DeviceInfo, InputManagerEvents } from "./types.ts";
+import type { DeviceAccess, DeviceInfo, InputManagerEvents, InputManagerOptions } from "./types.ts";
 
 /** 输入设备管理器 */
 export class InputManager extends EventEmitter {
   private bridge: RustBridge;
   private devices = new Map<string, InputDevice>();
   private initialized = false;
+  private deviceAccess: DeviceAccess;
+  /** Rust 侧实际生效的打开方式 */
+  private accessMode: "logind" | "direct" | "none" = "none";
+  private accessError: string | undefined;
+  /** 首次 device_list 到达（init 等它，保证 getDevices/getAccessMode 可用） */
+  private onFirstDeviceList: (() => void) | undefined;
 
-  constructor() {
+  constructor(options: InputManagerOptions = {}) {
     super();
-    this.bridge = new RustBridge();
+    this.deviceAccess = options.deviceAccess ?? "auto";
+    this.bridge = new RustBridge(this.deviceAccess);
+  }
+
+  /** 构造时指定的设备打开方式 */
+  getDeviceAccess(): DeviceAccess {
+    return this.deviceAccess;
+  }
+
+  /** 实际生效的设备打开方式（device_list 后可用） */
+  getAccessMode(): "logind" | "direct" | "none" {
+    return this.accessMode;
+  }
+
+  /** 回退到 direct 时 logind 不可用的原因 */
+  getAccessError(): string | undefined {
+    return this.accessError;
   }
 
   /**
@@ -38,6 +60,17 @@ export class InputManager extends EventEmitter {
     }
 
     this.initialized = true;
+
+    // 等初始设备列表（含 access_mode）到达再返回；读取失败时最多等 2s
+    const firstList = new Promise<void>((resolve) => {
+      this.onFirstDeviceList = resolve;
+    });
+    await Promise.race([
+      firstList,
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, 2000).unref?.();
+      }),
+    ]);
     return okVoid();
   }
 
@@ -47,6 +80,10 @@ export class InputManager extends EventEmitter {
   private handleMessage(msg: RustMessage) {
     switch (msg.type) {
       case "device_list":
+        this.onFirstDeviceList?.();
+        this.onFirstDeviceList = undefined;
+        this.accessMode = msg.access_mode;
+        this.accessError = msg.access_error;
         for (const rustDevice of msg.devices) {
           const info = convertDeviceInfo(rustDevice);
           this.addDevice(info);

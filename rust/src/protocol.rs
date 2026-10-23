@@ -9,7 +9,13 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Deserialize)]
 pub enum RustMessage {
     /// 设备列表响应
-    DeviceList { devices: Vec<DeviceFullInfo> },
+    DeviceList {
+        devices: Vec<DeviceFullInfo>,
+        /// 实际使用的设备打开方式："logind" 或 "direct"
+        access_mode: String,
+        /// 回退到 direct 时，logind 不可用的原因
+        access_error: Option<String>,
+    },
 
     /// 设备添加（热插拔）
     DeviceAdded { device: DeviceFullInfo },
@@ -41,10 +47,19 @@ pub enum RustMessage {
 impl Serialize for RustMessage {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
-            RustMessage::DeviceList { devices } => {
-                let mut map = serializer.serialize_map(Some(2))?;
+            RustMessage::DeviceList {
+                devices,
+                access_mode,
+                access_error,
+            } => {
+                let len = if access_error.is_some() { 4 } else { 3 };
+                let mut map = serializer.serialize_map(Some(len))?;
                 map.serialize_entry("type", "device_list")?;
                 map.serialize_entry("devices", devices)?;
+                map.serialize_entry("access_mode", access_mode)?;
+                if let Some(err) = access_error {
+                    map.serialize_entry("access_error", err)?;
+                }
                 map.end()
             }
             RustMessage::DeviceAdded { device } => {
@@ -163,6 +178,9 @@ pub struct DeviceFullInfo {
     /// 所有绝对轴的量程信息，key 为轴码（十进制字符串）
     #[serde(default)]
     pub abs_info: HashMap<String, AxisInfo>,
+    /// 这个设备的打开方式："logind" / "direct"；打开失败为 None
+    #[serde(default)]
+    pub access: Option<String>,
     pub errors: Vec<DeviceError>,
 }
 

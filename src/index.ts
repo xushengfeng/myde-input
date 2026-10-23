@@ -14,6 +14,8 @@ export type {
   InputEvent,
   InputManagerEvents,
   InputDeviceEvents,
+  DeviceAccess,
+  InputManagerOptions,
 } from "./types.ts";
 export type { Result, AppError } from "./result.ts";
 export { ErrorCode, ok, okVoid, err } from "./result.ts";

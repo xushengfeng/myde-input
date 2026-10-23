@@ -24,7 +24,17 @@ npm install myde-input
 pnpm add myde-input
 ```
 
-> **前置条件**：需要 Linux 系统，且进程有访问 `/dev/input/event*` 设备的权限（通常需要加入 `input` 用户组或以 root 运行）。
+> **前置条件**：需要 Linux 系统。设备打开方式可选：
+>
+> - `auto`（默认）：先直接打开 `/dev/input/event*`（`input` 组 / udev uaccess / root 可用时最省事），失败时回退 systemd-logind。
+> - `logind`：通过 systemd-logind `TakeDevice` 取 fd，不需要设备文件权限。logind 要求调用者是会话控制器，所以会调用 `TakeControl`：这会把当前 VT 切到图形模式并**关闭该 VT 的键盘**。因此从 TTY 启动、又用 Ctrl+C 停程序的用法，请用 `direct`/`auto`；`logind` 模式退出需要从其它 VT 结束进程（或由桌面自行退出）。
+> - `direct`：只直接打开，需要 `input` 组、udev uaccess 规则或 root。
+>
+> ```typescript
+> const manager = new InputManager({ deviceAccess: "auto" });
+> ```
+>
+> VT 切换时 logind 会让读取暂停，切回后用新 fd 自动继续。
 
 ## 快速开始
 
@@ -210,7 +220,7 @@ npx tsx cli.ts monitor --event=key
 npx tsx cli.ts monitor /dev/input/event3 --event=key,rel
 ```
 
-> **注意**：监听设备事件需要访问 `/dev/input/event*` 的权限。通常需要将用户加入 `input` 组（`sudo usermod -aG input $USER`）或以 root 运行。
+> **注意**：`direct` 模式需要访问 `/dev/input/event*` 的权限（`input` 组或 uaccess 规则，或以 root 运行）；`logind` 模式则要求进程属于一个前台登录会话。
 
 ## 开发
 

@@ -1,3 +1,4 @@
+mod access;
 mod device_info;
 mod protocol;
 mod reader;
@@ -5,6 +6,7 @@ mod scanner;
 
 use std::io::{self, Read, Write};
 
+use access::{AccessEvent, AccessMode, DeviceAccess};
 use protocol::*;
 use reader::EventReader;
 
@@ -23,6 +25,10 @@ fn main() {
         }
     }
 
+    // 设备打开方式由 TS 侧通过 --access= 指定，默认 auto（logind 优先，失败回退 direct）
+    let access_mode = parse_access_mode();
+    let mut access = DeviceAccess::new(access_mode);
+
     // 创建事件读取器
     let mut event_reader = match EventReader::new() {
         Ok(r) => r,
@@ -38,35 +44,60 @@ fn main() {
     };
 
     // 初始扫描设备
-    let devices = scanner::scan_devices();
+    let devices = scanner::scan_devices(&mut access);
     let device_infos: Vec<DeviceFullInfo> = devices.into_iter().map(|(info, _)| info).collect();
     let msg = RustMessage::DeviceList {
         devices: device_infos,
+        access_mode: access.access_mode().to_string(),
+        access_error: access.logind_error().map(|e| e.to_string()),
     };
     send_message(&mut stdout, &msg);
 
     // 主循环：读取命令 + 读取事件
     let mut stdin_buf = vec![0u8; 64 * 1024];
     let mut stdin_pos = 0;
+    let mut should_exit = false;
 
-    loop {
+    while !should_exit {
+        // 处理 logind 的 Pause/Resume/Gone（VT 切换、设备拔出）
+        for event in access.drain_events() {
+            match event {
+                AccessEvent::Paused(path) => {
+                    event_reader.pause_device(&path.to_string_lossy());
+                }
+                AccessEvent::Resumed(path, fd) => {
+                    event_reader.resume_device(&mut access, &path.to_string_lossy(), fd);
+                }
+                AccessEvent::Gone(path) => {
+                    event_reader.remove_device(&mut access, &path.to_string_lossy());
+                    send_message(
+                        &mut stdout,
+                        &RustMessage::DeviceRemoved {
+                            path: path.to_string_lossy().into_owned(),
+                        },
+                    );
+                }
+            }
+        }
+
         // 处理所有已到达的命令
-        let mut should_exit = false;
         while let Some(cmd) = read_command(&stdin, &mut stdin_buf, &mut stdin_pos) {
             match cmd {
                 TsCommand::ListDevices => {
-                    let devices = scanner::scan_devices();
+                    let devices = scanner::scan_devices(&mut access);
                     let device_infos: Vec<DeviceFullInfo> =
                         devices.into_iter().map(|(info, _)| info).collect();
                     let msg = RustMessage::DeviceList {
                         devices: device_infos,
+                        access_mode: access.access_mode().to_string(),
+                        access_error: access.logind_error().map(|e| e.to_string()),
                     };
                     send_message(&mut stdout, &msg);
                 }
                 TsCommand::StartReading { paths } => {
                     let mut errors = Vec::new();
                     for path in &paths {
-                        if let Err(e) = event_reader.add_device(path) {
+                        if let Err(e) = event_reader.add_device(&mut access, path) {
                             errors.push(e);
                         }
                     }
@@ -84,24 +115,10 @@ fn main() {
                     }
                 }
                 TsCommand::StopReading { paths } => {
-                    let mut errors = Vec::new();
                     for path in &paths {
-                        if let Err(e) = event_reader.remove_device(path) {
-                            errors.push(e);
-                        }
+                        event_reader.remove_device(&mut access, path);
                     }
-                    if errors.is_empty() {
-                        send_message(&mut stdout, &RustMessage::Ok);
-                    } else {
-                        send_message(
-                            &mut stdout,
-                            &RustMessage::Error {
-                                code: "STOP_READING_FAILED".to_string(),
-                                message: errors.join("; "),
-                                detail: None,
-                            },
-                        );
-                    }
+                    send_message(&mut stdout, &RustMessage::Ok);
                 }
                 TsCommand::Exit => {
                     should_exit = true;
@@ -142,7 +159,21 @@ fn main() {
         }
     }
 
-    event_reader.close();
+    event_reader.close(&mut access);
+}
+
+/// 解析 `--access=auto|logind|direct`
+fn parse_access_mode() -> AccessMode {
+    let mut mode = AccessMode::Auto;
+    for arg in std::env::args().skip(1) {
+        if let Some(value) = arg.strip_prefix("--access=") {
+            match AccessMode::parse(value) {
+                Some(parsed) => mode = parsed,
+                None => eprintln!("未知的 --access 值: {value}，使用 auto"),
+            }
+        }
+    }
+    mode
 }
 
 /// 读取命令（非阻塞）

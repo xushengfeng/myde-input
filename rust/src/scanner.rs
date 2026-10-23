@@ -2,11 +2,12 @@ use std::collections::HashMap;
 use std::fs;
 use std::os::unix::io::AsRawFd;
 
+use crate::access::DeviceAccess;
 use crate::device_info;
 use crate::protocol::*;
 
 /// 扫描所有输入设备
-pub fn scan_devices() -> Vec<(DeviceFullInfo, Option<String>)> {
+pub fn scan_devices(access: &mut DeviceAccess) -> Vec<(DeviceFullInfo, Option<String>)> {
     let mut results = Vec::new();
 
     // 解析 /proc/bus/input/devices 获取设备列表
@@ -24,6 +25,7 @@ pub fn scan_devices() -> Vec<(DeviceFullInfo, Option<String>)> {
                 capabilities: empty_capabilities(),
                 touch_info: None,
                 abs_info: HashMap::new(),
+                access: None,
                 errors: vec![DeviceError {
                     field: "proc_devices".to_string(),
                     message: e.clone(),
@@ -36,7 +38,7 @@ pub fn scan_devices() -> Vec<(DeviceFullInfo, Option<String>)> {
 
     for (event_name, proc_info) in proc_devices {
         let path = format!("/dev/input/{}", event_name);
-        let (info, error) = scan_single_device(&path, &proc_info);
+        let (info, error) = scan_single_device(&path, &proc_info, access);
         results.push((info, error));
     }
 
@@ -44,12 +46,17 @@ pub fn scan_devices() -> Vec<(DeviceFullInfo, Option<String>)> {
 }
 
 /// 扫描单个设备
-fn scan_single_device(path: &str, proc_info: &ProcDeviceInfo) -> (DeviceFullInfo, Option<String>) {
+fn scan_single_device(
+    path: &str,
+    proc_info: &ProcDeviceInfo,
+    access: &mut DeviceAccess,
+) -> (DeviceFullInfo, Option<String>) {
     let mut errors = Vec::new();
 
-    // 打开设备文件（File 必须保持存活，否则 fd 会被关闭）
-    let file = match open_device(path) {
-        Ok(f) => f,
+    // 打开设备（logind 优先，失败回退直接打开）。fd 必须保持存活，
+    // 后面所有能力/量程 ioctl 都在这上面做。
+    let taken = match access.open(std::path::Path::new(path)) {
+        Ok(t) => t,
         Err(e) => {
             errors.push(DeviceError {
                 field: "open".to_string(),
@@ -67,13 +74,15 @@ fn scan_single_device(path: &str, proc_info: &ProcDeviceInfo) -> (DeviceFullInfo
                     capabilities: empty_capabilities(),
                     touch_info: None,
                     abs_info: HashMap::new(),
+                    access: None,
                     errors,
                 },
                 Some(e),
             );
         }
     };
-    let fd = file.as_raw_fd();
+    let fd = taken.fd.as_raw_fd();
+    let access_kind = taken.access;
 
     // 读取设备能力
     let capabilities = match device_info::read_capabilities(fd) {
@@ -138,8 +147,9 @@ fn scan_single_device(path: &str, proc_info: &ProcDeviceInfo) -> (DeviceFullInfo
         }
     }
 
-    // file 在此 drop，fd 自动关闭
-    drop(file);
+    // 设备只借用一次用于读取能力/量程，随后归还（logind 会收到 ReleaseDevice）
+    access.release(taken.major, taken.minor);
+    drop(taken);
 
     let error_msg = if errors.is_empty() {
         None
@@ -159,6 +169,7 @@ fn scan_single_device(path: &str, proc_info: &ProcDeviceInfo) -> (DeviceFullInfo
             capabilities: caps_with_slots,
             touch_info,
             abs_info,
+            access: Some(access_kind.to_string()),
             errors,
         },
         error_msg,
@@ -304,14 +315,4 @@ fn parse_proc_devices() -> Result<HashMap<String, ProcDeviceInfo>, String> {
     }
 
     Ok(devices)
-}
-
-/// 打开设备文件（返回 File 以保持 fd 存活）
-fn open_device(path: &str) -> Result<std::fs::File, String> {
-    use std::os::unix::fs::OpenOptionsExt;
-    fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_RDONLY | libc::O_NONBLOCK)
-        .open(path)
-        .map_err(|e| format!("打开设备 {} 失败: {}", path, e))
 }

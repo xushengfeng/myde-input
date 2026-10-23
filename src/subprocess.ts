@@ -25,10 +25,15 @@ function getBinaryPath(): string {
 
 /** 子进程管理器 */
 export class RustBridge {
+  private deviceAccess: string;
   private proc: ChildProcess | null = null;
   private messageHandlers: ((msg: RustMessage) => void)[] = [];
   private buffer = Buffer.alloc(0);
   private messageLength: number | null = null;
+
+  constructor(deviceAccess: string) {
+    this.deviceAccess = deviceAccess;
+  }
 
   /**
    * 启动 Rust 子进程
@@ -37,7 +42,7 @@ export class RustBridge {
     try {
       const binaryPath = getBinaryPath();
 
-      this.proc = spawn(binaryPath, [], {
+      this.proc = spawn(binaryPath, [`--access=${this.deviceAccess}`], {
         stdio: ["pipe", "pipe", "pipe"],
       });
 

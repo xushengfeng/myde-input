@@ -13,7 +13,14 @@ import type {
 
 /** Rust -> TypeScript 消息 */
 export type RustMessage =
-  | { type: "device_list"; devices: RustDeviceInfo[] }
+  | {
+      type: "device_list";
+      devices: RustDeviceInfo[];
+      /** 实际使用的设备打开方式 */
+      access_mode: "logind" | "direct" | "none";
+      /** 回退到 direct 时 logind 不可用的原因 */
+      access_error?: string;
+    }
   | { type: "device_added"; device: RustDeviceInfo }
   | { type: "device_removed"; path: string }
   | {
@@ -65,6 +72,8 @@ export interface RustDeviceInfo {
     string,
     { min: number; max: number; fuzz: number; flat: number; resolution: number }
   >;
+  /** 这个设备的打开方式："logind" / "direct" */
+  access?: string;
   errors: { field: string; message: string }[];
 }
 
@@ -88,6 +97,7 @@ export function convertDeviceInfo(rust: RustDeviceInfo): DeviceInfo {
     capabilities: convertCapabilities(rust.capabilities),
     touchInfo: rust.touch_info ? convertTouchInfo(rust.touch_info) : undefined,
     absInfo: convertAbsInfo(rust.abs_info),
+    access: rust.access === "logind" || rust.access === "direct" ? rust.access : undefined,
     errors: rust.errors,
   };
 }
