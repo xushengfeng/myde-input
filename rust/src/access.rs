@@ -4,9 +4,7 @@
 //!   root 可用时最省事，也不影响 TTY），失败再走 systemd-logind。
 //! - `logind`：通过 logind `TakeDevice` 取 fd。只有“前台会话的控制器”才能取设备，
 //!   所以会调用 `TakeControl`（需要会话所有者）；这会把 VT 切到图形模式并关掉
-//!   TTY 键盘（Ctrl+C 不再送到启动 myde-wrap 的那个 shell）。这个模式下
-//!   Ctrl+Alt+F1..F12 由读取器用 VT_ACTIVATE ioctl 处理（必要时回退到 logind
-//!   ActivateSession）。
+//!   TTY 键盘（Ctrl+C 不再送到启动 myde-wrap 的那个 shell）。
 //! - `direct`：只直接打开。
 //!
 //! logind 模式在 VT 切走/切回时通过 `PauseDevice` / `ResumeDevice` 暂停读取并换 fd。
@@ -65,8 +63,6 @@ pub enum AccessEvent {
 
 struct LogindSession {
     proxy: Proxy<'static>,
-    manager: Proxy<'static>,
-    conn: Connection,
     paths: Arc<Mutex<HashMap<(u32, u32), PathBuf>>>,
 }
 
@@ -163,25 +159,6 @@ impl DeviceAccess {
         }
     }
 
-    /// 切换 VT。
-    ///
-    /// `TakeControl` 会把当前 VT 切到 KD_GRAPHICS 并关掉内核 TTY 键盘，
-    /// 因此 logind 模式下 Ctrl+Alt+F1..F12 由输入侧调用 VT_ACTIVATE，
-    /// 不可用时再回退到 logind 的 ActivateSession。
-    pub fn switch_to(&self, vt: u32) -> Result<(), String> {
-        // 优先 VT_ACTIVATE：目标 VT 即使没有登录会话（只有 getty 登录提示）
-        // 也能切过去；logind 的 ActivateSession 只能切到已存在的会话。
-        match vt_activate(vt) {
-            Ok(()) => Ok(()),
-            Err(ioctl_err) => match &self.backend {
-                Backend::Logind(session) => session
-                    .activate_session(vt)
-                    .map_err(|e| format!("{ioctl_err}；{e}")),
-                Backend::Direct => Err(ioctl_err),
-            },
-        }
-    }
-
     /// 取出 logind 后台线程转发的事件（非阻塞）
     pub fn drain_events(&self) -> Vec<AccessEvent> {
         let mut events = Vec::new();
@@ -254,32 +231,6 @@ impl DeviceAccess {
     }
 }
 
-/// 通过当前控制终端的 VT_ACTIVATE 切换 VT。
-///
-/// logind TakeControl 后内核 TTY 键盘被关闭，但当前进程仍持有控制终端
-///（myde-wrap 从 TTY 启动，Electron 及其子进程继承），所以这个 ioctl 有权限。
-fn vt_activate(vt: u32) -> Result<(), String> {
-    if vt == 0 {
-        return Err("VT 号不能为 0".to_string());
-    }
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/tty")
-        .map_err(|e| format!("打开 /dev/tty 失败: {e}"))?;
-    // linux/vt.h: #define VT_ACTIVATE 0x5606
-    const VT_ACTIVATE: libc::c_ulong = 0x5606;
-    let ret = unsafe { libc::ioctl(file.as_raw_fd(), VT_ACTIVATE, vt as libc::c_ulong) };
-    if ret < 0 {
-        Err(format!(
-            "VT_ACTIVATE({vt}) 失败: {}",
-            std::io::Error::last_os_error()
-        ))
-    } else {
-        Ok(())
-    }
-}
-
 fn open_direct(path: &Path) -> Result<(OwnedFd, u32, u32), String> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     let metadata = std::fs::metadata(path).map_err(|e| format!("stat {} 失败: {e}", path.display()))?;
@@ -333,13 +284,6 @@ impl LogindSession {
             "org.freedesktop.login1.Session",
         )
         .map_err(|e| format!("创建 Session 代理失败: {e}"))?;
-        let manager = Proxy::new_owned(
-            conn.clone(),
-            "org.freedesktop.login1",
-            "/org/freedesktop/login1",
-            "org.freedesktop.login1.Manager",
-        )
-        .map_err(|e| format!("创建 Manager 代理失败: {e}"))?;
 
         // TakeDevice 要求调用者是会话控制器。会话所有者可以 TakeControl(false)，
         // 但如果已有控制器（例如窗口模式下的 KWin）会 EBUSY。
@@ -415,12 +359,7 @@ impl LogindSession {
             });
         }
 
-        Ok(Self {
-            proxy,
-            manager,
-            conn,
-            paths,
-        })
+        Ok(Self { proxy, paths })
     }
 
     fn take_device(&self, path: &Path, major: u32, minor: u32) -> Result<(OwnedFd, bool), String> {
@@ -442,41 +381,6 @@ impl LogindSession {
     fn release_device(&self, major: u32, minor: u32) {
         self.paths.lock().unwrap().remove(&(major, minor));
         let _ = self.proxy.call_method("ReleaseDevice", &(major, minor));
-    }
-
-    /// logind 没有 Session.SwitchTo；按 VTNr 找到目标 VT 的会话并
-    /// Manager.ActivateSession。仅在 VT_ACTIVATE 不可用时作为回退。
-    fn activate_session(&self, vt: u32) -> Result<(), String> {
-        if vt == 0 {
-            return Err("VT 号不能为 0".to_string());
-        }
-        let sessions: Vec<(String, u32, String, String, OwnedObjectPath)> = self
-            .manager
-            .call_method("ListSessions", &())
-            .map_err(|e| format!("ListSessions 失败: {e}"))?
-            .body()
-            .deserialize()
-            .map_err(|e| format!("解析 ListSessions 失败: {e}"))?;
-
-        for (id, _uid, _user, _seat, path) in sessions {
-            let session = Proxy::new_owned(
-                self.conn.clone(),
-                "org.freedesktop.login1",
-                path.into_inner(),
-                "org.freedesktop.login1.Session",
-            )
-            .map_err(|e| format!("创建目标 Session 代理失败: {e}"))?;
-            let vtnr: u32 = session
-                .get_property("VTNr")
-                .map_err(|e| format!("读取目标会话 VTNr 失败: {e}"))?;
-            if vtnr == vt {
-                self.manager
-                    .call_method("ActivateSession", &(id,))
-                    .map_err(|e| format!("ActivateSession({vt}) 失败: {e}"))?;
-                return Ok(());
-            }
-        }
-        Err(format!("没有 VT {vt} 对应的登录会话"))
     }
 }
 
