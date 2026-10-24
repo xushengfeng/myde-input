@@ -58,6 +58,13 @@ fn main() {
     let mut stdin_pos = 0;
     let mut should_exit = false;
 
+    // logind TakeControl 会关掉内核 TTY 键盘，Ctrl+Alt+F* 需要在这里处理。
+    // 左右修饰键分开记录，避免按住一侧时另一侧释放导致状态误清。
+    let mut ctrl_left = false;
+    let mut ctrl_right = false;
+    let mut alt_left = false;
+    let mut alt_right = false;
+
     while !should_exit {
         // 处理 logind 的 Pause/Resume/Gone（VT 切换、设备拔出）
         for event in access.drain_events() {
@@ -135,6 +142,65 @@ fn main() {
         match event_reader.wait_events(10) {
             Ok(events) => {
                 for event in events {
+                    let mut consume = false;
+
+                    // EV_KEY = 1
+                    if event.event_type == 1 {
+                        match event.code {
+                            29 => ctrl_left = event.value != 0,   // KEY_LEFTCTRL
+                            97 => ctrl_right = event.value != 0,  // KEY_RIGHTCTRL
+                            56 => alt_left = event.value != 0,    // KEY_LEFTALT
+                            100 => alt_right = event.value != 0,  // KEY_RIGHTALT
+                            _ => {}
+                        }
+
+                        let ctrl = ctrl_left || ctrl_right;
+                        let alt = alt_left || alt_right;
+                        if event.value == 1 && ctrl && alt {
+                            if let Some(vt) = vt_for_function_key(event.code) {
+                                // direct 模式内核会处理 VT 切换，只有 logind 模式需要代劳
+                                if access.access_mode() == "logind" {
+                                    match access.switch_to(vt) {
+                                        Ok(()) => {
+                                            consume = true;
+                                            // 切走期间收不到松键事件，主动补发修饰键 release，
+                                            // 避免桌面/应用在切回来后认为 Ctrl/Alt 一直按着
+                                            for (code, down) in [
+                                                (29, ctrl_left),   // KEY_LEFTCTRL
+                                                (97, ctrl_right),  // KEY_RIGHTCTRL
+                                                (56, alt_left),    // KEY_LEFTALT
+                                                (100, alt_right),  // KEY_RIGHTALT
+                                            ] {
+                                                if down {
+                                                    send_message(
+                                                        &mut stdout,
+                                                        &RustMessage::InputEvent {
+                                                            path: event.path.clone(),
+                                                            event_type: 1,
+                                                            code,
+                                                            value: 0,
+                                                            timestamp_sec: event.timestamp_sec,
+                                                            timestamp_usec: event.timestamp_usec,
+                                                        },
+                                                    );
+                                                }
+                                            }
+                                            ctrl_left = false;
+                                            ctrl_right = false;
+                                            alt_left = false;
+                                            alt_right = false;
+                                        }
+                                        Err(e) => eprintln!("切换 VT {vt} 失败: {e}"),
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if consume {
+                        continue;
+                    }
+
                     let msg = RustMessage::InputEvent {
                         path: event.path,
                         event_type: event.event_type,
@@ -160,6 +226,16 @@ fn main() {
     }
 
     event_reader.close(&mut access);
+}
+
+/// Ctrl+Alt+F1..F12 对应的 VT 号（evdev KEY_F1..KEY_F10 连续，F11/F12 分段）
+fn vt_for_function_key(code: u16) -> Option<u32> {
+    match code {
+        59..=68 => Some(u32::from(code - 58)),
+        87 => Some(11),
+        88 => Some(12),
+        _ => None,
+    }
 }
 
 /// 解析 `--access=auto|logind|direct`

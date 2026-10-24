@@ -27,7 +27,7 @@ pnpm add myde-input
 > **前置条件**：需要 Linux 系统。设备打开方式可选：
 >
 > - `auto`（默认）：先直接打开 `/dev/input/event*`（`input` 组 / udev uaccess / root 可用时最省事），失败时回退 systemd-logind。
-> - `logind`：通过 systemd-logind `TakeDevice` 取 fd，不需要设备文件权限。logind 要求调用者是会话控制器，所以会调用 `TakeControl`：这会把当前 VT 切到图形模式并**关闭该 VT 的键盘**。因此从 TTY 启动、又用 Ctrl+C 停程序的用法，请用 `direct`/`auto`；`logind` 模式退出需要从其它 VT 结束进程（或由桌面自行退出）。
+> - `logind`：通过 systemd-logind `TakeDevice` 取 fd，不需要设备文件权限。logind 要求调用者是会话控制器，所以会调用 `TakeControl`：这会把当前 VT 切到图形模式并**关闭该 VT 的键盘**。读取器会自己处理 `Ctrl+Alt+F1..F12`（调用 `Session.SwitchTo`），但 `Ctrl+C` 仍不会送到启动程序的 shell。因此从 TTY 启动、又用 Ctrl+C 停程序的用法，请用 `direct`/`auto`；`logind` 模式退出需要从其它 VT 结束进程（或由桌面自行退出）。
 > - `direct`：只直接打开，需要 `input` 组、udev uaccess 规则或 root。
 >
 > ```typescript
