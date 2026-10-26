@@ -79,7 +79,9 @@ jobs:
         run: pnpm test:run
 
       - name: 发布到 npm
-        run: npm publish
+        run: |
+          unset NODE_AUTH_TOKEN
+          npm publish
 
       - name: 创建 GitHub Release
         uses: softprops/action-gh-release@v2
