@@ -3,6 +3,7 @@
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { arch, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,6 +42,13 @@ export class RustBridge {
   spawn(): Result<void> {
     try {
       const binaryPath = getBinaryPath();
+
+      if (!existsSync(binaryPath)) {
+        return err(
+          ErrorCode.ProcessSpawnFailed,
+          `缺少当前平台(${platform()}-${arch()})的读取器: ${binaryPath}`,
+        );
+      }
 
       this.proc = spawn(binaryPath, [`--access=${this.deviceAccess}`], {
         stdio: ["pipe", "pipe", "pipe"],
